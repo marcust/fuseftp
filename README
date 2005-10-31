@@ -1,0 +1,9 @@
+== Installation ==
+
+perl Makefile.PL
+make
+sudo make install
+
+If any of the preregs fail, you can install the missing modules using
+the cpan shell which is started with "cpan" or "cpan -MCPAN -e
+shell". 
