@@ -39,67 +39,97 @@ use File::Spec::Functions;
 #preregs
 use Net::FTP;
 use Fuse;
-use Cache::File;
 
 use constant DEBUG => 0;
-use constant TIMEOUT => '5 min';
 
 our $VERSION;
 
-$VERSION = '0.2';
+$VERSION = '0.3';
 
 #initial stuff
-my $basedir = catdir($ENV{HOME},'.fuseftp');
-mkdir $basedir unless -d $basedir;
-my $filecache = new Cache::File( cache_root => $basedir,
-				 default_expires => TIMEOUT );
+my $homedir = catdir($ENV{HOME},'.fuseftp');
+mkdir $homedir unless -d $homedir;
 
 #get command line arguments
-my $mountpoint = shift;
-my $server = shift;
+my @opts = grep /^-/, @ARGV;
+my @other = grep /^[^-]/, @ARGV;
+my $mountpoint = shift @other;
+my $server = shift @other;
+
+my @arg_opts = map { split( /=/, $_ ) } grep( /=/, @opts);
+my %arg_opts = (
+		"--cache" => "file",
+		"--timeout" => "300",
+		@arg_opts,
+    );
+map { $arg_opts{$_}++ } grep /^[^=]+$/, @opts;
+
+if ($arg_opts{"-h"} || $arg_opts{"--help"}) {
+    print join "", <DATA>;
+    exit(0);
+}
 
 unless (defined $mountpoint && defined $server) {
-    print("$0 mountpoint [user[:password]@]host\n");
+    print("$0 [options] mountpoint [user[:password]@]host[:directory]\n");
     exit 1;
 }
 
-#split them
-my ($username, $password, $host);
-if ($server =~ /(([^:]+):)?(([^@]+)@)?(.+)/) {
-    if ($1) {
-	$username = $2;
-	$password = $4;
-    } else {
-	$username = $4;
-    }
-    $host = $5;
+my $timeout = $arg_opts{"--timout"};
+
+my $filecache;
+if ($arg_opts{"--cache"} eq "file") {
+    require Cache::File;
+    $filecache = new Cache::File( cache_root => $homedir,
+				 default_expires => $timeout );
 }
+if ($arg_opts{"--cache"} eq "memory") {
+    require Cache::Memory;
+    $filecache = new Cache::Memory( default_expires => $timeout );
+}
+
+#split them
+my ($username, $password, $host, $basedir);
+my ($left, $right) = split /@/, $server;
+unless (defined $right) {
+    $right = $left;
+    undef $left;
+}
+($username, $password) = split /:/, $left if defined $left;
+($host, $basedir) = split /:/, $right if defined $right;
+
+$basedir = '/' unless defined $basedir;
+
+print("username: $username\npassword: $password\nhost: $host\ndir: $basedir\n")
+      if DEBUG;
 
 #make the connection
 my $ftp = new Net::FTP($host) or 
     die "Can't connect to $host: $@\n";
 
-
-die "Mountpoint $mountpoint does not exist or is busy\n" if (!-d $mountpoint);
+die "Mountpoint $mountpoint does not exist or is busy\n" unless -d $mountpoint;
 
 $ftp->login($username, $password) or
-    die "Can't login: $@";
+    die "Login failure!\n";
 
 $ftp->binary;
 
 print "Successfully logged into $host\n"; 
 
 my %attr_cache = ();
-my %type_cache = ( '/' =>  'd' );
+my %type_cache = ( $basedir =>  'd' );
 my %dir_seen = ();
 my %file_obj = ();
 my %link_cache = ();
+my %file_offset = ();
+
+my $time = time;
 
 #subs
 sub ftp_getdir {
     my $dir = shift;
     print "called catdir for '$dir'\n" if DEBUG;
-    $ftp->cwd($dir);
+
+    $ftp->cwd(catdir($basedir,$dir));
 
     my @files = $ftp->ls();
 
@@ -112,32 +142,35 @@ sub ftp_getattr {
     my $filename = shift;
 
     if (!exists $attr_cache{$filename}) {
-	my $base = '/';
+	my $base = $basedir;
 
-	if ($filename =~ m|(^/.+/).+|) {
-	    $base = $1;
+
+	if ($filename =~ m|(.+)/[^/]+|) {
+	    $base = catdir($basedir, $1);
 	}
+
+	$filename = catdir($basedir, $filename);
 
 	$ftp->cwd($base);
 
 	if (! exists $dir_seen{$base} ) {
 	    my @entries = $ftp->dir($base);
 	    my @files = $ftp->ls($base);
-	    my $file = shift @files;
-	    my $entry = shift @entries;;
-	    while ($file && $entry) {
-		$file =~ s|/+|/|g;
-		$type_cache{$file} = substr $entry, 0, 1;
-		print("type for $file is " . $type_cache{$file} . "\n") if DEBUG;
-		$file = shift @files;
-		$entry = shift @entries;;
+	    foreach my $file (@files) {
+		$file =~ s|.*/||g;
+		my ($entry) = grep /\s+$file( ->.+)?$/, @entries;
+		if ($entry) {
+		    $type_cache{catdir($base,$file)} = substr $entry, 0, 1;
+		    print("type for $file is " . $type_cache{catdir($base,$file)} . "\n") 
+		    if DEBUG;
+		}
 	    }
 	    $dir_seen{$base}++;
 	}
 
-	if ((!$type_cache{$filename}) && $filename ne '/') {
+	if ((!$type_cache{$filename}) && $filename ne $base) {
 	    $attr_cache{$filename} = undef;
-	    print "no entry for $filename\n" if DEBUG;
+	    print "returning ENOENT for $filename\n" if DEBUG;
 	    return -ENOENT();
 	}
 
@@ -164,7 +197,7 @@ sub ftp_getattr {
 	$rdev = 0;
 
 	$atime = $ftp->mdtm($filename);
-	$atime = time unless defined $atime;
+	$atime = $time unless defined $atime;
 
 	$size = $ftp->size($filename);
 	$size = 0 unless defined $size;
@@ -199,7 +232,12 @@ sub ftp_rename {
     my $oldname = shift;
     my $newname = shift;
 
+    $oldname = catdir($basedir, $oldname);
+    $newname = catdir($basedir, $newname);
+
     if ($ftp->rename($oldname, $newname)) {
+	my ($dir) = $newname =~ m|(.+)/.+|;
+	delete $dir_seen{$dir} if $dir;
 	return 0;
     } else {
 	return -EIO();
@@ -210,10 +248,21 @@ sub ftp_open {
     my $file = shift;
     my $flags = shift;
 
+    $file = catdir($basedir, $file);
+
     print "open: $file\n" if DEBUG;
 
     if ($flags & (O_WRONLY | O_APPEND)) {
 	print("opening $file for WRONLY | APPEND\n") if DEBUG;
+	unless ($filecache->get( $file )) {
+	    my $size = $ftp->size($file);
+	    if ($size) {
+		$file_obj{$file} = $ftp->retr($file);
+		my $data = my_read($file, $size);
+		$filecache->set($file, $data, 'never');
+		$file_obj{$file}->close();
+	    }
+	}
 	$file_obj{$file} = $ftp->stor($file);
 	if ($file_obj{$file}) {
 	    return 0;
@@ -247,20 +296,24 @@ sub ftp_open {
     return -ENOENT();
 }
 
-sub __read {
+sub my_read {
     my $file = shift;
     my $size = shift;
 
+    print("reading $size from $file\n") if DEBUG;
+
     my $retval = "";
     my $buffer = "";
-    my $read = 0;
-    my $oldread = 0;
-    while ($read < $size) {
-	$oldread = $read;
-	$read += $file_obj{$file}->read($buffer, $size);
-	last if ($read == $oldread);
+    my $read_total = 0;
+    my $read_bytes;
+    while ($read_total < $size) {
+	my $read_bytes = $file_obj{$file}->read($buffer, $size);
+	last if ($read_bytes == 0); #EOF
+	$read_total += $read_bytes;
 	$retval .= $buffer;
     }
+
+    print ("done ($read_total)\n") if DEBUG;
     return $retval;
 }
 
@@ -268,6 +321,8 @@ sub ftp_read {
     my $file = shift;
     my $size = shift;
     my $offset = shift;
+
+    $file = catdir($basedir, $file);
 
     print "read: $file\n" if DEBUG;
     if (!$file_obj{$file}) {
@@ -277,26 +332,33 @@ sub ftp_read {
     my $data = "";
     if ($filecache->get( $file )) {
 	$data = $filecache->get( $file );
-
-	if (length($file) < $offset + $size) {
-	    $data = __read($file, $offset + $size);
+	if (length($data) < $offset + $size) {
+	    $data .= my_read($file, $size);
 	} 
     } else {
-	$data = __read($file, $offset + $size);
+	$data = my_read($file, $offset + $size);
     }
 
-    $filecache->set($file, $data, TIMEOUT);
+    $filecache->set($file, $data, $timeout);
     return substr($data, $offset, $size);
 }
 
 sub ftp_release {
     my $file = shift;
 
+    $file = catdir($basedir, $file);
+
     print("release $file\n") if DEBUG;
 
     if ($file_obj{$file}) {
+	$filecache->remove($file);
+	delete $attr_cache{$file};
+	$type_cache{$file} = 'f';
+	my ($dir) = $file =~ m|(.+)/.+|;
+	delete $dir_seen{$dir} if $dir;
 	$file_obj{$file}->close;
 	delete $file_obj{$file};
+	$file_offset{$file} = 0;
 	return 0;
     } else {
 	warn "Trying to close not open file $file\n";
@@ -307,6 +369,8 @@ sub ftp_release {
 sub ftp_readlink {
     my $file = shift;
     my $dir;
+
+    $file = catdir($basedir, $file);
 
     if (!exists $link_cache{$file}) {
 	print "readlink: $file\n" if DEBUG;
@@ -319,12 +383,13 @@ sub ftp_readlink {
 	my @lines = $ftp->dir($dir);
 
 	my $cfile = $file;
-	$cfile =~ s|^/||;
+	$cfile =~ s|.+/||;
 
 	foreach my $line (@lines) {
 	    print $line . "\n" if DEBUG;
 	    if ($line =~ $cfile) {
 		my ($link,$target) = split /\s*->\s*/, $line;
+		$target =~ s|^$basedir||;
 		$link_cache{$file} = $target;
 		return $target;
 	    }
@@ -337,6 +402,8 @@ sub ftp_readlink {
 
 sub ftp_unlink {
     my $file = shift;
+
+    $file = catdir($basedir, $file);
 
     print "delete $file\n" if DEBUG;
 
@@ -352,6 +419,8 @@ sub ftp_unlink {
 sub ftp_rmdir {
     my $dir = shift;
 
+    $dir = catdir($basedir, $dir);
+
     if ($ftp->rmdir($dir)) {
 	delete $dir_seen{$dir};
 	delete $type_cache{$dir};
@@ -363,6 +432,8 @@ sub ftp_rmdir {
 
 sub ftp_mkdir {
     my $dir = shift;
+
+    $dir = catdir($basedir, $dir);
 
     if ($ftp->mkdir($dir)) {
 	delete $dir_seen{$dir};
@@ -378,35 +449,45 @@ sub ftp_write {
     my $buffer = shift;
     my $offset = shift;
 
+    $file_offset{$file} = 0 unless $file_offset{$file};
+
+    print "write $file (offset $offset)\n" if DEBUG;
+
+    $file = catdir($basedir, $file);
+
     my $data = $filecache->get($file);
     $data = "" unless defined $data;
 
-    if (length($data) < $offset) {
-	#retrieve the whole file
-	$data = __read($file, $ftp->size($file));
+    $offset = $offset - $file_offset{$file};
+
+    if ($offset == 0) {
+	$data = $buffer;
+    } else {
+	substr $data, $offset, length($buffer), $buffer;
     }
 
-    substr $data, $offset, length($buffer), $buffer;
-
     $filecache->set($file, $data, 'never');
+
+    print "done\n" if DEBUG;
+
+    return length($buffer);
 }
 
 sub ftp_flush {
     my $file = shift;
+
+    $file = catdir($basedir, $file);
 
     print "flush: $file\n" if DEBUG;
 
     my $data = $filecache->get($file);
     if ($file_obj{$file}) {
 	if ($data) {
-	    print("writing buffer is :$data:\n") if DEBUG;
 	    $file_obj{$file}->write($data, length($data));
+	    $file_offset{$file} += length($data);
+	    $filecache->set($file, "", 'never');
 	}
-	$filecache->remove($file);
-	delete $attr_cache{$file};
-	$type_cache{$file} = 'f';
-	my ($dir) = $file =~ m|(.+)/.+|;
-	delete $dir_seen{$dir} if $dir;
+	print "returning from flush\n" if DEBUG;
 	return 0;
     } else {
 	warn "Trying to flush not open file $file\n";
@@ -419,13 +500,46 @@ sub ftp_mknod{
     my $mode = shift;
     my $device = shift;
 
+    print "mknod $file\n" if DEBUG;
+
     ftp_open($file, O_WRONLY);
     ftp_write($file, "", 0);
     ftp_flush($file);
     ftp_release($file);
+
+    return 0;
+}
+
+sub ftp_truncate{
+    my $file = shift;
+    my $offset = shift;
+
+    print "truncate $file (offset $offset)\n" if DEBUG;
+
+    if ($offset != 0) {
+	ftp_open($file, O_RDONLY);
+	my $data = ftp_read($file, $offset, 0);
+	ftp_flush($file);
+	ftp_release($file);
+	ftp_open($file, O_WRONLY);
+	ftp_write($file, $data, length($data));
+	ftp_flush($file);
+	ftp_release($file);
+    } else {
+	$ftp->delete(catdir($basedir, $file));
+	ftp_mknod($file, 0, 0);
+    }
+
+    print "finished truncate $file\n" if DEBUG;
+
+    return 0;
 }
 
 #run fuse
+my @extraargs;
+push @extraargs, ("debug", 1) if ($arg_opts{"--debug"});
+push @extraargs, ("mountopts", "allow_other") if ($arg_opts{"--allow_other"});
+
 Fuse::main(mountpoint => $mountpoint,
 
 	   getdir => \&ftp_getdir,
@@ -441,5 +555,43 @@ Fuse::main(mountpoint => $mountpoint,
 	   write => \&ftp_write,
 	   flush => \&ftp_flush,
 	   mknod => \&ftp_mknod,
+	   truncate => \&ftp_truncate,
+	   @extraargs,
 	   );
 
+__DATA__
+
+Usage: fusesmb [options] mountpoint [user[:password]@]host[:directory]
+
+where options is one of:
+
+  --allow_other       The FUSE allow_other option. To use this, you will also 
+                      need 'user_allow_other' in /etc/fuse.conf as per the 
+                      FUSE documention.
+
+  --cache=memory      The default caching uses a file system caching system, if
+                      you want to speed things up and won't transfer big files
+                      you can use in memory caching.
+
+  --timeout=seconds   Timeout for read cache, files will be stored 'seconds' 
+                      seconds in the cache. Defaults to 300.
+
+  --debug             Enable FUSE debugging messages
+
+Mountpoint is the directory where the FTP server will be mountet into the filesystem.
+
+The last parameter is the server. 
+
+Examples:
+ 
+   Mounts the directory pub/linux of ftp.kernel.org to ~/kernel using memory cache:
+
+   fusesmb --cache=memory ~/kernel ftp.kernel.org:/pub/linux
+
+   Mounts the FTP server my.isp.com to ~/homepage using username "foo" and password 
+   "bar". NOTE: This way your password will show up in the process table. You can
+   specify passwords on a per server basis in ~/.netrc
+
+   fusesmb ~/homepage foo:bar@my.isp.com
+
+   
