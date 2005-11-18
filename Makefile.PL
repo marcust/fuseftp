@@ -6,5 +6,5 @@ WriteMakefile(
 			 },
 	      NAME            => 'fuseftp',
 	      VERSION_FROM    => 'fuseftp',
-	      PM => { 'fuseftp' => "${INST_BIN}/fuseftp" },
+	      EXE_FILES => [ 'fuseftp' ],
 	      );

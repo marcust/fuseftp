@@ -44,7 +44,7 @@ use constant DEBUG => 0;
 
 our $VERSION;
 
-$VERSION = '0.3';
+$VERSION = '0.4';
 
 #initial stuff
 my $homedir = catdir($ENV{HOME},'.fuseftp');
@@ -89,7 +89,15 @@ if ($arg_opts{"--cache"} eq "memory") {
 
 #split them
 my ($username, $password, $host, $basedir);
-my ($left, $right) = split /@/, $server;
+my (@parts) = split /@/, $server;
+my ($left, $right);
+if (@parts <= 2) {
+    ($left, $right) = @parts;
+} else {
+    $right = pop @parts;
+    $left = join '@', @parts;
+}
+
 unless (defined $right) {
     $right = $left;
     undef $left;
@@ -103,8 +111,13 @@ print("username: $username\npassword: $password\nhost: $host\ndir: $basedir\n")
       if DEBUG;
 
 #make the connection
-my $ftp = new Net::FTP($host) or 
-    die "Can't connect to $host: $@\n";
+my $ftp;
+if ($arg_opts{'passive'}) {
+    $ftp = new Net::FTP($host, Passive => 1);
+} else {
+    $ftp = new Net::FTP($host);
+}
+$ftp or die "Coulndn' make FTP connection to $host: $@!\n";
 
 die "Mountpoint $mountpoint does not exist or is busy\n" unless -d $mountpoint;
 
@@ -561,9 +574,12 @@ Fuse::main(mountpoint => $mountpoint,
 
 __DATA__
 
-Usage: fusesmb [options] mountpoint [user[:password]@]host[:directory]
+Usage: fuseftp [options] mountpoint [user[:password]@]host[:directory]
 
 where options is one of:
+
+  --passive           Make a passive FTP connection
+
 
   --allow_other       The FUSE allow_other option. To use this, you will also 
                       need 'user_allow_other' in /etc/fuse.conf as per the 
@@ -586,12 +602,12 @@ Examples:
  
    Mounts the directory pub/linux of ftp.kernel.org to ~/kernel using memory cache:
 
-   fusesmb --cache=memory ~/kernel ftp.kernel.org:/pub/linux
+   fuseftp --cache=memory ~/kernel ftp.kernel.org:/pub/linux
 
    Mounts the FTP server my.isp.com to ~/homepage using username "foo" and password 
    "bar". NOTE: This way your password will show up in the process table. You can
    specify passwords on a per server basis in ~/.netrc
 
-   fusesmb ~/homepage foo:bar@my.isp.com
+   fuseftp ~/homepage foo:bar@my.isp.com
 
    
