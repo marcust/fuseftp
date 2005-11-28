@@ -44,7 +44,7 @@ use constant DEBUG => 0;
 
 our $VERSION;
 
-$VERSION = '0.4';
+$VERSION = '0.6';
 
 #initial stuff
 my $homedir = catdir($ENV{HOME},'.fuseftp');
@@ -102,13 +102,14 @@ unless (defined $right) {
     $right = $left;
     undef $left;
 }
+
 ($username, $password) = split /:/, $left if defined $left;
 ($host, $basedir) = split /:/, $right if defined $right;
 
 $basedir = '/' unless defined $basedir;
 
-print("username: $username\npassword: $password\nhost: $host\ndir: $basedir\n")
-      if DEBUG;
+print "username: $username\npassword: $password\nhost: $host\ndir: $basedir\n"
+    if DEBUG;
 
 #make the connection
 my $ftp;
@@ -117,7 +118,7 @@ if ($arg_opts{'passive'}) {
 } else {
     $ftp = new Net::FTP($host);
 }
-$ftp or die "Coulndn' make FTP connection to $host: $@!\n";
+$ftp or die "Couldn't make FTP connection to $host: $@!\n";
 
 die "Mountpoint $mountpoint does not exist or is busy\n" unless -d $mountpoint;
 
@@ -140,7 +141,7 @@ my $time = time;
 #subs
 sub ftp_getdir {
     my $dir = shift;
-    print "called catdir for '$dir'\n" if DEBUG;
+    print "called getdir for '$dir'\n" if DEBUG;
 
     $ftp->cwd(catdir($basedir,$dir));
 
@@ -168,9 +169,10 @@ sub ftp_getattr {
 
 	if (! exists $dir_seen{$base} ) {
 	    my @entries = $ftp->dir($base);
-	    my @files = $ftp->ls($base);
+	    my @files = sort $ftp->ls($base);
 	    foreach my $file (@files) {
 		$file =~ s|.*/||g;
+		next if $file eq ".";
 		my ($entry) = grep /\s+$file( ->.+)?$/, @entries;
 		if ($entry) {
 		    $type_cache{catdir($base,$file)} = substr $entry, 0, 1;
@@ -396,7 +398,7 @@ sub ftp_readlink {
 	my @lines = $ftp->dir($dir);
 
 	my $cfile = $file;
-	$cfile =~ s|.+/||;
+	$cfile =~ s|.*/||;
 
 	foreach my $line (@lines) {
 	    print $line . "\n" if DEBUG;
@@ -462,11 +464,11 @@ sub ftp_write {
     my $buffer = shift;
     my $offset = shift;
 
+    $file = catdir($basedir, $file);
+
     $file_offset{$file} = 0 unless $file_offset{$file};
 
     print "write $file (offset $offset)\n" if DEBUG;
-
-    $file = catdir($basedir, $file);
 
     my $data = $filecache->get($file);
     $data = "" unless defined $data;
