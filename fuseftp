@@ -39,6 +39,7 @@ use File::Spec::Functions;
 #preregs
 use Net::FTP;
 use Fuse;
+use Term::ReadKey;
 
 use constant DEBUG => 0;
 
@@ -108,12 +109,23 @@ unless (defined $right) {
 
 $basedir = '/' unless defined $basedir;
 
+if (exists $arg_opts{'--ask-password'}) {
+    if ((!defined $password) || ($password eq "")) {
+        syswrite STDOUT, "Password: ";
+        ReadMode('noecho');
+        $password = ReadLine(0);
+        chomp($password);
+        ReadMode('restore');
+        print "\n";
+    }
+}
+
 print "username: $username\npassword: $password\nhost: $host\ndir: $basedir\n"
     if DEBUG;
 
 #make the connection
 my $ftp;
-if ($arg_opts{'passive'}) {
+if ($arg_opts{'--passive'}) {
     $ftp = new Net::FTP($host, Passive => 1);
 } else {
     $ftp = new Net::FTP($host);
@@ -582,6 +594,7 @@ where options is one of:
 
   --passive           Make a passive FTP connection
 
+  --ask-password      Interactive ask for the password if none provided
 
   --allow_other       The FUSE allow_other option. To use this, you will also 
                       need 'user_allow_other' in /etc/fuse.conf as per the 
