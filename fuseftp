@@ -24,8 +24,8 @@
 # A userspace filesystem for ftp transfer
 # Usage: fuseftp mountpoint [user[:password]@]host &
 # 
-# Prereq: Fuse, Net::FTP, Cache::File
-# Version: 0.2
+# Prereq: Fuse, Net::FTP, Cache::File, Term::ReadKey
+# Version: 0.7
 # 
 #########################################################################
 
@@ -45,7 +45,7 @@ use constant DEBUG => 0;
 
 our $VERSION;
 
-$VERSION = '0.6';
+$VERSION = '0.7';
 
 #initial stuff
 my $homedir = catdir($ENV{HOME},'.fuseftp');
@@ -74,6 +74,8 @@ unless (defined $mountpoint && defined $server) {
     print("$0 [options] mountpoint [user[:password]@]host[:directory]\n");
     exit 1;
 }
+
+print "fuseftp $VERSION - 2005 (c) by Marcus Thiesen <marcus\@thiesen.org>\n";
 
 my $timeout = $arg_opts{"--timout"};
 
@@ -109,7 +111,7 @@ unless (defined $right) {
 
 $basedir = '/' unless defined $basedir;
 
-if (exists $arg_opts{'--ask-password'}) {
+if ($arg_opts{'--ask-password'}) {
     if ((!defined $password) || ($password eq "")) {
         syswrite STDOUT, "Password: ";
         ReadMode('noecho');
@@ -564,8 +566,15 @@ sub ftp_truncate{
 
 #run fuse
 my @extraargs;
-push @extraargs, ("debug", 1) if ($arg_opts{"--debug"});
-push @extraargs, ("mountopts", "allow_other") if ($arg_opts{"--allow_other"});
+push @extraargs, ("debug", 1) if (exists $arg_opts{"--debug"});
+push @extraargs, ("mountopts", $arg_opts{"--options"}) if ($arg_opts{"--options"});
+
+unless (DEBUG || $arg_opts{'--foreground'} || $arg_opts{"--debug"})
+{
+    # fork and exit parent process to put FuseFtp into background
+    print "Backgrounding...\n";
+    fork() and exit(0);
+}
 
 Fuse::main(mountpoint => $mountpoint,
 
@@ -596,9 +605,10 @@ where options is one of:
 
   --ask-password      Interactive ask for the password if none provided
 
-  --allow_other       The FUSE allow_other option. To use this, you will also 
-                      need 'user_allow_other' in /etc/fuse.conf as per the 
-                      FUSE documention.
+  --foreground        Don't put process into background
+
+  --options=opt[,opt] Pass options to FUSE
+                      allow_others: allow access by other users
 
   --cache=memory      The default caching uses a file system caching system, if
                       you want to speed things up and won't transfer big files
@@ -608,6 +618,7 @@ where options is one of:
                       seconds in the cache. Defaults to 300.
 
   --debug             Enable FUSE debugging messages
+                      (implies --foreground)
 
 Mountpoint is the directory where the FTP server will be mountet into the filesystem.
 
