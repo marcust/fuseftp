@@ -45,7 +45,7 @@ use constant DEBUG => 0;
 
 our $VERSION;
 
-$VERSION = '0.7';
+$VERSION = '0.8';
 
 #initial stuff
 my $homedir = catdir($ENV{HOME},'.fuseftp');
@@ -187,7 +187,11 @@ sub ftp_getattr {
 	    foreach my $file (@files) {
 		$file =~ s|.*/||g;
 		next if $file eq ".";
-		my ($entry) = grep /\s+$file( ->.+)?$/, @entries;
+
+		my $fileregexp = $file;
+		# escape special chars that would otherwise be evaluated in the regexp
+		$fileregexp =~ s/([][+*.\$^(){}?])/\\$1/gsi;
+		my ($entry) = grep /\s+$fileregexp( ->.+)?$/, @entries;
 		if ($entry) {
 		    $type_cache{catdir($base,$file)} = substr $entry, 0, 1;
 		    print("type for $file is " . $type_cache{catdir($base,$file)} . "\n") 
