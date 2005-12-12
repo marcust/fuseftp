@@ -61,6 +61,7 @@ my @arg_opts = map { split( /=/, $_ ) } grep( /=/, @opts);
 my %arg_opts = (
 		"--cache" => "file",
 		"--timeout" => "300",
+		"--port" => "21",
 		@arg_opts,
     );
 map { $arg_opts{$_}++ } grep /^[^=]+$/, @opts;
@@ -77,7 +78,8 @@ unless (defined $mountpoint && defined $server) {
 
 print "fuseftp $VERSION - 2005 (c) by Marcus Thiesen <marcus\@thiesen.org>\n";
 
-my $timeout = $arg_opts{"--timout"};
+my $timeout = $arg_opts{"--timeout"};
+my $port = $arg_opts{"--port"};
 
 my $filecache;
 if ($arg_opts{"--cache"} eq "file") {
@@ -128,11 +130,11 @@ print "username: $username\npassword: $password\nhost: $host\ndir: $basedir\n"
 #make the connection
 my $ftp;
 if ($arg_opts{'--passive'}) {
-    $ftp = new Net::FTP($host, Passive => 1);
+    $ftp = new Net::FTP($host, Passive => 1, Port => $port);
 } else {
-    $ftp = new Net::FTP($host);
+    $ftp = new Net::FTP($host, Port => $port);
 }
-$ftp or die "Couldn't make FTP connection to $host: $@!\n";
+$ftp or die "Couldn't make FTP connection to $host on port $port: $@!\n";
 
 die "Mountpoint $mountpoint does not exist or is busy\n" unless -d $mountpoint;
 
@@ -190,7 +192,7 @@ sub ftp_getattr {
 
 		my $fileregexp = $file;
 		# escape special chars that would otherwise be evaluated in the regexp
-		$fileregexp =~ s/([][+*.\$^(){}?])/\\$1/gsi;
+		$fileregexp =~ s/(\[|\]|[+*.\$^(){}?])/\\$1/gsi;
 		my ($entry) = grep /\s+$fileregexp( ->.+)?$/, @entries;
 		if ($entry) {
 		    $type_cache{catdir($base,$file)} = substr $entry, 0, 1;
@@ -605,24 +607,28 @@ Usage: fuseftp [options] mountpoint [user[:password]@]host[:directory]
 
 where options is one of:
 
-  --passive           Make a passive FTP connection
-
   --ask-password      Interactive ask for the password if none provided
+
+  --cache=memory      The default caching uses a file system caching system, if
+                      you want to speed things up and won't transfer big files
+                      you can use in memory caching.
+
+  --debug             Enable FUSE debugging messages
+                      (implies --foreground)
 
   --foreground        Don't put process into background
 
   --options=opt[,opt] Pass options to FUSE
                       allow_others: allow access by other users
 
-  --cache=memory      The default caching uses a file system caching system, if
-                      you want to speed things up and won't transfer big files
-                      you can use in memory caching.
+  --passive           Make a passive FTP connection
+
+  --port=21           Set the port to use for the connection, defaults to
+                      21.              
 
   --timeout=seconds   Timeout for read cache, files will be stored 'seconds' 
                       seconds in the cache. Defaults to 300.
 
-  --debug             Enable FUSE debugging messages
-                      (implies --foreground)
 
 Mountpoint is the directory where the FTP server will be mountet into the filesystem.
 
