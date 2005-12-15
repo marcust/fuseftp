@@ -45,7 +45,7 @@ use constant DEBUG => 0;
 
 our $VERSION;
 
-$VERSION = '0.8';
+$VERSION = '0.9';
 
 #initial stuff
 my $homedir = catdir($ENV{HOME},'.fuseftp');
@@ -127,23 +127,34 @@ if ($arg_opts{'--ask-password'}) {
 print "username: $username\npassword: $password\nhost: $host\ndir: $basedir\n"
     if DEBUG;
 
-#make the connection
-my $ftp;
-if ($arg_opts{'--passive'}) {
-    $ftp = new Net::FTP($host, Passive => 1, Port => $port);
-} else {
-    $ftp = new Net::FTP($host, Port => $port);
-}
-$ftp or die "Couldn't make FTP connection to $host on port $port: $@!\n";
-
 die "Mountpoint $mountpoint does not exist or is busy\n" unless -d $mountpoint;
 
-$ftp->login($username, $password) or
-    die "Login failure!\n";
+#make the connection
+sub connectFTP {
+    my $ftp;
+    if ($arg_opts{'--passive'}) {
+	$ftp = new Net::FTP($host, Passive => 1, Port => $port);
+    } else {
+	$ftp = new Net::FTP($host, Port => $port);
+    }
+    $ftp or die "Couldn't make FTP connection to $host on port $port: $@!\n";
 
-$ftp->binary;
+    $ftp->login($username, $password) or
+	die "Login failure!\n";
 
-print "Successfully logged into $host\n"; 
+    $ftp->binary;
+
+    return $ftp;
+}
+
+
+my $ftp = connectFTP();
+print "Successfully logged into $host\n" if $ftp; 
+
+sub check_connection {
+    connectFTP() if (!$ftp->connected);
+}
+
 
 my %attr_cache = ();
 my %type_cache = ( $basedir =>  'd' );
@@ -159,6 +170,8 @@ sub ftp_getdir {
     my $dir = shift;
     print "called getdir for '$dir'\n" if DEBUG;
 
+    check_connection;
+
     $ftp->cwd(catdir($basedir,$dir));
 
     my @files = $ftp->ls();
@@ -170,6 +183,8 @@ sub ftp_getdir {
 
 sub ftp_getattr {
     my $filename = shift;
+
+    check_connection;
 
     if (!exists $attr_cache{$filename}) {
 	my $base = $basedir;
@@ -267,6 +282,8 @@ sub ftp_rename {
     my $oldname = shift;
     my $newname = shift;
 
+    check_connection;
+
     $oldname = catdir($basedir, $oldname);
     $newname = catdir($basedir, $newname);
 
@@ -284,6 +301,8 @@ sub ftp_open {
     my $flags = shift;
 
     $file = catdir($basedir, $file);
+
+    check_connection;
 
     print "open: $file\n" if DEBUG;
 
@@ -336,6 +355,7 @@ sub my_read {
     my $size = shift;
 
     print("reading $size from $file\n") if DEBUG;
+    check_connection;
 
     my $retval = "";
     my $buffer = "";
@@ -358,6 +378,8 @@ sub ftp_read {
     my $offset = shift;
 
     $file = catdir($basedir, $file);
+
+    check_connection;
 
     print "read: $file\n" if DEBUG;
     if (!$file_obj{$file}) {
@@ -383,6 +405,8 @@ sub ftp_release {
 
     $file = catdir($basedir, $file);
 
+    check_connection;
+
     print("release $file\n") if DEBUG;
 
     if ($file_obj{$file}) {
@@ -406,6 +430,8 @@ sub ftp_readlink {
     my $dir;
 
     $file = catdir($basedir, $file);
+
+    check_connection;
 
     if (!exists $link_cache{$file}) {
 	print "readlink: $file\n" if DEBUG;
@@ -440,6 +466,8 @@ sub ftp_unlink {
 
     $file = catdir($basedir, $file);
 
+    check_connection;
+
     print "delete $file\n" if DEBUG;
 
     if ($ftp->delete($file)) {
@@ -456,6 +484,8 @@ sub ftp_rmdir {
 
     $dir = catdir($basedir, $dir);
 
+    check_connection;
+
     if ($ftp->rmdir($dir)) {
 	delete $dir_seen{$dir};
 	delete $type_cache{$dir};
@@ -470,6 +500,8 @@ sub ftp_mkdir {
 
     $dir = catdir($basedir, $dir);
 
+    check_connection;
+
     if ($ftp->mkdir($dir)) {
 	delete $dir_seen{$dir};
 	delete $type_cache{$dir};
@@ -483,6 +515,8 @@ sub ftp_write {
     my $file = shift;
     my $buffer = shift;
     my $offset = shift;
+
+    check_connection;
 
     $file = catdir($basedir, $file);
 
@@ -511,6 +545,8 @@ sub ftp_write {
 sub ftp_flush {
     my $file = shift;
 
+    check_connection;
+
     $file = catdir($basedir, $file);
 
     print "flush: $file\n" if DEBUG;
@@ -535,6 +571,8 @@ sub ftp_mknod{
     my $mode = shift;
     my $device = shift;
 
+    check_connection;
+
     print "mknod $file\n" if DEBUG;
 
     ftp_open($file, O_WRONLY);
@@ -548,6 +586,8 @@ sub ftp_mknod{
 sub ftp_truncate{
     my $file = shift;
     my $offset = shift;
+
+    check_connection;
 
     print "truncate $file (offset $offset)\n" if DEBUG;
 
