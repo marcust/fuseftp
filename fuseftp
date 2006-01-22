@@ -152,7 +152,7 @@ my $ftp = connectFTP();
 print "Successfully logged into $host\n" if $ftp; 
 
 sub check_connection {
-    connectFTP() if (!$ftp->connected);
+    connectFTP() if (!$ftp->connected || !$ftp->opened);
 }
 
 
@@ -487,8 +487,9 @@ sub ftp_rmdir {
     check_connection;
 
     if ($ftp->rmdir($dir)) {
-	delete $dir_seen{$dir};
-	delete $type_cache{$dir};
+	my ($parentdir) = ($dir =~ m|(.+)/.+$|);
+	delete $dir_seen{$parentdir};
+	delete $type_cache{$parentdir};
 	return 0;
     } else {
 	return -EIO();
@@ -503,8 +504,9 @@ sub ftp_mkdir {
     check_connection;
 
     if ($ftp->mkdir($dir)) {
-	delete $dir_seen{$dir};
-	delete $type_cache{$dir};
+	my ($parentdir) = ($dir =~ m|(.+)/.+$|);
+	delete $dir_seen{$parentdir};
+	delete $type_cache{$parentdir};
 	return 0;
     } else {
 	return -EIO();
